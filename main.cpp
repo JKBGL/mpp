@@ -1,5 +1,5 @@
 #include <stdio.h>		//printf
-#include <stdlib.h>		//atof
+#include <stdlib.h>		//atof, atoi
 #include "mpp.h"
 
 int main(int argc, char** argv) {
@@ -22,12 +22,12 @@ int main(int argc, char** argv) {
 		printf("Encountered an error: %s", m);
 	}
 
-	double result = mpp::calculatePP(difficulty, score, od, note_count, mods, true);
+	double result = mpp::calculatePP(difficulty, score, od, note_count, mods, false);
 	if (result != -1) {
-		printf("Result: %lfpp\n", result);
-	}
-	else
+		printf("%lf\n", result);
+	} else {
 		printf("Invalid score.");
+	}
 
 	return 0;
 }
