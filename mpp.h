@@ -1,61 +1,82 @@
 #pragma once
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string>
 #include <fstream>
+#include <sstream>
+#include <regex>
+#include <vector>
+#include <string_view>
+#include "mpp.h"
 
-class mpp {
-private:
-    std::string _beatmap_file_contents = "";
-    int _mods = 0;
-    bool loaded = false;
-    bool modarr[4] = { 0, 0, 0, 0 };
+namespace mpp_structs {
+    struct note {
+        int key;
+        int start_t;
+        int end_t;
+        double overall_strain = 1;
+        double individual_strain[10]; //individual columns
+    };
 
-    //helpers
-    bool scanFileHeaders();
-    //std::list<std::string> splitToLines(std::string);
-
-public:
     struct beatmap_data {
         double od = 0;
         int note_count = 0;
-        int keys = 0;   
+        int keys = 0;
         double difficulty = 0;
         double hp = 0;
         std::string title;
         std::string artist;
         std::string version;
-    } bmap_data;
-
-    enum LOAD_TYPE {
-        FROM_FILE,
-        FROM_STRING
     };
 
+    enum mods {
+        NF = 1 << 0,
+        EZ = 1 << 1,
+        HT = 1 << 8,
+        DT = 1 << 6,
+        NC = 1 << 9
+    };
+}
+
+class mpp {
+private:
+    int _mods = 0;
+    bool loaded = false; //Is map data loaded?
+    bool modarr[4] = { 0, 0, 0, 0 }; //NF, EZ, HT, DT
+    std::vector<mpp_structs::note> notes;
+
+    //helpers
+    bool parse_osu(std::string);
+    static std::vector<std::string_view> split(std::string_view str, std::string_view delimeters);
+
+    //useless
+    static std::string minispam(int cnt, int size) {
+        std::string output = "";
+        for (int x = 0; x < size; x++)
+            output += (x == cnt) ? "* " : "  ";
+        return output;
+    }
+
+public:
+    mpp_structs::beatmap_data bmap_data;
     mpp();
-    mpp(std::string, LOAD_TYPE = mpp::FROM_FILE, int = 0);
-
-    void loadFromFile(std::string);
-    void loadFromString(std::string);
-
+    mpp(std::string, int = 0);
     void setMods(int = 0);
-
-    //This is temporary.
-    void setNotesAndDifficulty(int = 0, double = 0);
-
     double calculateDifficulty();
-    double calculatePP(int = 1000000, bool debug = false);
+    double calculatePP(int = 1000000);
 
     //static definition for direct usage
-    static double calculatePP(double difficulty, int score, double od, int note_count, int mods = 0, bool debug = false) {
+    static double calculatePP(double difficulty, int score, double od, int note_count, int mods = 0) {
         if (score > 1000000) return -1;
 
         double score_rate = 1;
 
         bool mod_combo[3] = { false, false, false };
         if (mods != 0) { //boost score to be calculable (will require correct star rating for the HT and EZ mods)
-            if (mods & 1 << 0) { mod_combo[0] = true; score_rate *= 0.5; } //NF
-            if (mods & 1 << 1) { mod_combo[1] = true; score_rate *= 0.5; } //EZ
-            if (mods & 1 << 8) { mod_combo[2] = true; score_rate *= 0.5; } //HT
+            if (mods & mpp_structs::mods::NF) { mod_combo[0] = true; score_rate *= 0.5; } //NF
+            if (mods & mpp_structs::mods::EZ) { mod_combo[1] = true; score_rate *= 0.5; } //EZ
+            if (mods & mpp_structs::mods::HT) { mod_combo[2] = true; score_rate *= 0.5; } //HT
         }
 
         double real_score = score / score_rate;
@@ -77,11 +98,18 @@ public:
         if (mod_combo[0]) pp_multiplier *= 0.9; //NF
         if (mod_combo[1]) pp_multiplier *= 0.5; //EZ
 
-        if (debug) {
-            printf("DIFF %lf*, SCORE: %d, OD: %lf, NOTES: %d, MODS: %d\n", difficulty, score, od, note_count, mods);
-            printf("NF: %d EZ: %d HT: %d\nscore_rate: %lf\nreal_score: %lf\nhit_window300: %lf\nstrain: %lf\npp_multiplier: %lf\naccuracy: %lf\n\n", mod_combo[0], mod_combo[1], mod_combo[2], score_rate, real_score, hitwindow300, strain, pp_multiplier, accuracy);
-        }
-
         return pow(pow(strain, 1.1) + pow(accuracy, 1.1), (1 / 1.1)) * pp_multiplier;
 	}
+
+    static std::string modsStr(int mods) {
+        std::string result = "";
+        if (mods != 0) {
+            if (mods & mpp_structs::mods::NF) { result += "NF"; }       // NF
+            if (mods & mpp_structs::mods::EZ) { result += "EZ"; }       // EZ
+            if (mods & mpp_structs::mods::HT) { result += "HT"; }       // HT
+            if (mods & mpp_structs::mods::NC) { result += "NC"; }       // DT
+            else if (mods & mpp_structs::mods::DT) { result += "DT"; }  // NC
+        }
+        return result;
+    }
 };
