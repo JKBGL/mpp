@@ -61,10 +61,6 @@ bool mpp::parse_osu(std::string file) {
 	// Reference
 	using mpp_structs::note;
 
-	//temp array used in splitting
-	int xm[6] = {0,0,0,0,0,0};
-	int tkp = 0; //token pos
-
 	int stop_read = 0;
 	while (fgets(curr_line, line_size, x) != NULL) {
 		curr_line[strlen(curr_line) - 1] = '\0'; //fix the new way for reading lines by removing the \n char
