@@ -7,8 +7,8 @@ Since there are now numerous outdated osu!mania performance calculators out ther
 #include "mpp.h"
 
 int main() {
-    //                    diff, score, od, notes, mods, debug
-    printf(mpp::calculatePP(6.14, 891396, 9, 1928, 0, false));
+    //                    diff, score, od, notes, mods
+    printf(mpp::calculatePP(6.14, 891396, 9, 1928, 0));
     return 0;
 }
 ```
