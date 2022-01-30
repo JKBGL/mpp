@@ -1,238 +1,287 @@
 #include "mpp.h"
 
-std::vector<std::string_view> mpp::split(std::string_view str, std::string_view delimeters) {
-	std::vector<std::string_view> res;
-	res.reserve(str.length() / 2);
-	const char* ptr = str.data();
-	size_t size = 0;
-	for (const char c : str) {
-		for (const char d : delimeters) {
-			if (c == d) {
-				res.emplace_back(ptr, size);
-				ptr += size + 1;
-				size = 0;
-				goto next;
-			}
-		}
-		++size;
-	next: continue;
+template<char delim, typename ...T>
+_inline const std::tuple<T...>& split_line(const std::string_view& line, std::tuple<T...>& v) {
+	size_t i{}, size{ line.size() }, start{};
+	std::apply(
+		[&](auto&... value_pack) {
+			(([&](auto& value) {
+				if (i >= size) return;
+				while (i < size && line[i] != delim) {
+					++i;
+					continue;
+				}
+				std::from_chars(line.data() + start, line.data() + std::min(i, size), value);
+				start = std::min(++i, size - 1);
+			} (value_pack)), ...);
+		}, v
+	);
+	return v;
+}
+
+#define PARSE_LINE(str, ret)\
+	if(line.starts_with(str##sv)){\
+		decltype(ret) k;\
+		std::from_chars(line.data() + sizeof(str) - 1, line.data() + line.size(), k);\
+		ret = k;\
+		continue;\
 	}
-	if (size) res.emplace_back(ptr, size);
-	return res;
+
+#define PARSE_LINE_STR(str, ret)\
+	if (line.starts_with(str##sv)) {\
+		ret = line.substr(sizeof(str) - 1, line.size());\
+		continue;\
+	}
+
+mpp::calculator::calculator() { }
+mpp::calculator::calculator(char* location) {
+	if (!this->parse_osu(location)) [[unlikely]] {
+		printf("Failed parsing file.\n");
+	}
 }
 
-mpp::mpp() {};
-mpp::mpp(std::string file, int mods) {
-	if (mods != 0)
-		setMods(mods);
-	parse_osu(file);
-}
+bool mpp::calculator::parse_osu(char* file) {
+	std::fstream x(
+		file,
+		std::ios::binary |
+		std::ios::ate |
+		std::ios::in
+	);
 
-//to be renamed to parse_file()
-bool mpp::parse_osu(std::string file) {
-	FILE *x;
-	const size_t line_size = 300;
-	char *curr_line = (char*)malloc(line_size);
-	std::string line;
-
-	fopen_s(&x, file.c_str(), "r");
-	if (x == NULL)
+	if (x.is_open() == 0) [[unlikely]] {
+		printf("Failed opening file.\n");
 		return false; //file could not be opened.
+	}
 
-	//[SectionName]
-	std::regex section_r(R"(\[(.*)\])");
-	std::smatch section_m;
-	std::string current_section = "";
+	std::vector<char> read_buff;
+	std::string_view mem;
+	uint32_t slider_count = 0;
 
-	//x,y,time,type,hitSound,endTime:useless crap ...
-	std::regex note_r(R"((\d+),\d+,(\d+),(\d+),\d+,(\d+))");
-	//r1 x
-	//r2 time
-	//r3 if 128 = slider
-	//r4 endTime
+	// get file size
+	const auto file_size { (size_t)x.tellg() };
 
-	int slider_count = 0;
+	// return file cursor to beginning
+	x.seekg(0, std::ios::beg);
 
-	//section metadata stuff
-	size_t pos;
-	std::string key;
-	std::string val;
+	read_buff.resize(file_size);
+	x.read(read_buff.data(), file_size);
 
-	// Reference
-	using mpp_structs::note;
+	mem = std::string_view(read_buff.data(), file_size);
 
-	int stop_read = 0;
-	while (fgets(curr_line, line_size, x) != NULL) {
-		curr_line[strlen(curr_line) - 1] = '\0'; //fix the new way for reading lines by removing the \n char
-		line = curr_line; // char to string
+	//int nt = 0;
+	short current_section = sections::Unknown;
 
-		//try matching every line for a section
-		if (std::regex_search(line, section_m, section_r)) {
-			current_section = section_m.str(1); //set current section
-			//if (_debug) printf("DEBUG: FOUND SECTION >> %s\n", current_section.c_str());
+	// needed for std::string_view compare
+	using std::operator""sv;
+
+	// file is opened, now loop
+	for (std::string_view line; get_line(mem, line);) {
+
+		//define line_size so we don't reuse the .size() function
+		size_t line_size = line.size();
+
+		//remove \ret from string
+		if (line_size)
+			line = line.substr(0, line_size -= (line[line_size - 1] == '\r'));
+
+		//if line is empty skip
+		if (line_size == 0)
+			continue;
+
+		if (line[0] == '[') [[unlikely]] {
+			if (line == "[General]"sv)
+				current_section = sections::General;
+			else if (line == "[Difficulty]"sv)
+				current_section = sections::Difficulty;
+			else if (line == "[Metadata]"sv)
+				current_section = sections::Metadata;
+			else if (line == "[HitObjects]"sv)
+				current_section = sections::HitObjects;
+			else
+				current_section = sections::Unknown;
+			//printf("Section: %d\n", current_section);
+			continue;
 		}
 
-		//for debugging
-		std::string debug = "";
-
-		//Difficulty section
-		if (current_section == "Difficulty") {
-			pos = line.find(":");
-			key = line.substr(0, pos);
-			val = line.substr(pos + 1);
-
-			if (key == "CircleSize") {
-				bmap_data.keys = atoi(val.c_str());
-				debug = "CS";
-
-			} else if (key == "OverallDifficulty") {
-				bmap_data.od = atof(val.c_str());
-				debug = "OD";
-
-			} else if (key == "HPDrainRate") {
-				bmap_data.hp = atof(val.c_str());
-				debug = "HP";
-
+		switch (current_section) {
+			case sections::Metadata: {
+				PARSE_LINE_STR("Title:", bmap_data.title);
+				PARSE_LINE_STR("Artist:", bmap_data.artist);
+				PARSE_LINE_STR("Version:", bmap_data.version);
+				continue;
+				break;
 			}
+			case sections::Difficulty: {
+				PARSE_LINE("HPDrainRate:", bmap_data.hp);
+				PARSE_LINE("CircleSize:", bmap_data.keys);
+				PARSE_LINE("OverallDifficulty:", bmap_data.od);
+				continue;
+				break;
+			};
+			case sections::HitObjects: {
+				std::tuple<int, int, int, int, int, int> hitobj;
 
-		//Metadata section
-		} else if (current_section == "Metadata") {
-			pos = line.find(":");
-			key = line.substr(0, pos);
-			val = line.substr(pos + 1);
+				// useless y, hitSound
+				const auto& [x, y, time, type, hitSound, endTime] { split_line<','>(line, hitobj) };
+				int\
+					key		{ (int)floor((double)x * (double)bmap_data.keys / 512) },\
+					start_t	{ time },\
+					end_t	{ endTime };
 
-			if (key == "Title") {
-				bmap_data.title = val;
-				debug = "Ttitle";
-
-			} else if (key == "Artist") {
-				bmap_data.artist = val;
-				debug = "Artist";
-
-			} else if (key == "Version") {
-				bmap_data.version = val;
-				debug = "Version";
-			}
-		}
-
-		//Oh boy, here's where it gets hard, Hit objects section
-		if (current_section == "HitObjects") {
-			std::smatch note_m;
-			if (std::regex_search(line, note_m, note_r)) {
-				int x = atoi(note_m.str(1).c_str());
-				int start_t = atoi(note_m.str(2).c_str());
-				int end_t = atoi(note_m.str(4).c_str());
-				int key = floor((double)x * (double)bmap_data.keys / 512);
-
-				//properly parse sliders
-				if (atoi(note_m.str(3).c_str()) == 128) {
+				// is the object a slider ?
+				if (type == 128)
 					slider_count++;
-				} else
+				else
 					end_t = start_t;
 
-				note temp_note = {
+				notes.push_back(
+					note {
 						key,
 						start_t,
 						end_t,
 						1.0,
 						{0,0,0,0,0,0,0,0,0,0}
-				};
-
-				notes.push_back(temp_note);
-				//printf(" %s | PARSED NOTE %5.d: { key: %ld, start_t: %d, end_t: %d }\n", minispam(notes.back().key, bmap_data.keys).c_str(), notes.size(), notes.back().key, notes.back().start_t, notes.back().end_t);
+					}
+				);
+				continue;
+				break;
 			}
+			default: { continue; break; }
 		}
+
+		//nt++; // line counter, useless
 	}
 	bmap_data.note_count = notes.size();
 
 	//free file handle and line pointer
-	fclose(x);
-	free(curr_line);
+	x.close();
 
-	printf("NOTE COUNT: %d, SLIDER COUNT: %d\n", notes.size(), slider_count);
+	//map successfully loaded.
+	loaded = true;
+
+	//printf("Notes: %d, Sliders: %d\n", bmap_data.note_count, slider_count);
 	return true;
 }
 
-double mpp::calculateDifficulty() {
-	using mpp_structs::note;
-
-	double time_scale = 1;				//NM
-	if (modarr[2]) time_scale = 0.75;	//HT
-	if (modarr[3]) time_scale = 1.5;	//DT
-
-	double strain_step = 400 * time_scale;
-	double weight_decay_base = 0.9;
-	double individual_decay_base = 0.125;
-	double overall_decay_base = 0.3;
-	double star_scaling_factor = 0.018;
-
-	// get strain for each note
-	double held_until[10] = {0,0,0,0,0,0,0,0,0,0};
-
-	note previous_note;
-	previous_note.key = -1; //invalidate previous note
-
-	for (note &_note : notes) {
-		if (previous_note.key == -1) {
-			previous_note = _note;
-			continue;
-		} //assign first note to previous_note
-
-		double time_elapsed = (_note.start_t - previous_note.start_t) / time_scale / 1000;
-		double individual_decay = pow(individual_decay_base, time_elapsed);
-		double overall_decay = pow(overall_decay_base, time_elapsed);
-		double hold_factor = 1;
-		double hold_addition = 0;
-
-		for (int i = 0; i < bmap_data.keys; i++) {
-			if (_note.start_t < held_until[i] && _note.end_t > held_until[i]) {
-				hold_addition = 1;
-			} else if (_note.end_t == held_until[i]) {
-				hold_addition = 0;
-			} else if (_note.end_t < held_until[i]) {
-				hold_factor = 1.25;
-			}
-
-			_note.individual_strain[i] = previous_note.individual_strain[i] * individual_decay;
+// restrict is used to make sure we don't use the same pointer twice
+bool mpp::calculator::get_line(std::string_view& __restrict memory, std::string_view& __restrict output) {
+	for (size_t i = 0, size = memory.size(); i < size; ++i) {
+		// shorten memory and append current line to output
+		if (memory[i] == '\n') [[unlikely]] {
+			output = memory.substr(0,i);
+			memory = memory.substr(i + 1);
+			return true;
 		}
+	}
+	return false;
+}
 
-		held_until[_note.key] = _note.end_t;
+void mpp::calculator::setMods(int mods_int) {
+	this->mods = mods_int;
+}
 
-		_note.individual_strain[_note.key] += 2 * hold_factor;
-		_note.overall_strain = previous_note.overall_strain * overall_decay + (1 + hold_addition) * hold_factor;
-
-		previous_note = _note;
+double mpp::calculator::getDifficulty() {
+	if (!this->loaded) [[unlikely]] {
+		printf("No map loaded.");
+		return 0;
 	}
 
-	// get difficulty for each interval
+	double time_scale = 1;
+	if (mods & mods::HT)
+		time_scale = 0.75;
+	if (mods & mods::DT)
+		time_scale = 1.5;
+
+	// there seems to be an unfixable value inconsistency between languages ???
+
+	double strain_step = 400 * time_scale;
+	const double weight_decay_base = 0.9;
+	const double individual_decay_base = 0.125;
+	const double overall_decay_base = 0.3;
+	//const double star_scaling_factor = 0.018;
+	const double star_scaling_factor = 0.01804; //attempt to make the calculator more accurate by forcing an assumed value
+
+	// get strain for each note
+	double held_until[10] = { 0,0,0,0,0,0,0,0,0,0 };
+
+	// the previous note
+	note previous_note;
+
+	// predefine variables so we don't re-define inside the loop
+	
+	double time_elapsed;
+	double individual_decay;
+	double overall_decay;
+	double hold_factor = 1;
+	double hold_addition = 0;
+
+	// difficulty set for each interval aka the strain
 	std::vector<double> strain_table;
 
 	double max_strain = 0;
 	double interval_end_time = strain_step;
-	previous_note.key = -1; //invalidate previous note again
 
-	for (note &_note : notes) {
-		while (_note.start_t > interval_end_time) {
+	double individual_decayStrain;
+	double overall_decayStrain;
+
+	for (note& n : this->notes) {
+
+		// assign first note to previous_note
+		if (previous_note.key == -1) {
+			previous_note = n;
+			continue;
+		}
+
+		time_elapsed = ((double)n.start_t - previous_note.start_t) / time_scale / 1000;
+		individual_decay = pow(individual_decay_base, time_elapsed);
+		overall_decay = pow(overall_decay_base, time_elapsed);
+		hold_factor = 1;
+		hold_addition = 0;
+
+		for (int i = 0; i < this->bmap_data.keys; i++) {
+
+			if (n.start_t < held_until[i] && n.end_t > held_until[i])
+				hold_addition = 1;
+
+			else if (n.end_t == held_until[i])
+				hold_addition = 0;
+
+			else if (n.end_t < held_until[i])
+				hold_factor = 1.25;
+
+			n.individual_strain[i] = previous_note.individual_strain[i] * individual_decay;
+		}
+
+		held_until[n.key] = n.end_t;
+
+		n.individual_strain[n.key] += 2 * hold_factor;
+		n.overall_strain = previous_note.overall_strain * overall_decay + (1 + hold_addition) * hold_factor;
+
+		previous_note = n;
+	}
+
+	previous_note.key = -1;
+	for (note& n : this->notes) { // double loop needed for stability
+		while (n.start_t > interval_end_time) {
 			strain_table.push_back(max_strain);
 			if (previous_note.key == -1) {
 				max_strain = 0;
 			} else {
-				const double individual_decay = pow(individual_decay_base, ((interval_end_time - previous_note.start_t) / 1000));
-				const double overall_decay = pow(overall_decay_base, ((interval_end_time - previous_note.start_t) / 1000));
-				max_strain = previous_note.individual_strain[previous_note.key] * individual_decay + previous_note.overall_strain * overall_decay;
+				individual_decayStrain = pow(individual_decay_base, ((interval_end_time - previous_note.start_t) / 1000));
+				overall_decayStrain = pow(overall_decay_base, ((interval_end_time - previous_note.start_t) / 1000));
+				max_strain = previous_note.individual_strain[previous_note.key] * individual_decayStrain + previous_note.overall_strain * overall_decayStrain;
 			}
-			
+
 			interval_end_time += strain_step;
 		}
 
-		double strain = _note.individual_strain[_note.key] + _note.overall_strain;
+		double strain = n.individual_strain[n.key] + n.overall_strain;
 		if (strain > max_strain) max_strain = strain;
-		previous_note = _note;
+		previous_note = n;
 	}
 
 	// get total difficulty
 	double difficulty = 0, weight = 1;
-	//strain_table.sort((x, y) = > {return y - x});
 	std::sort(strain_table.begin(), strain_table.end(), [](double x, double y) { return y < x; });
 
 	for (int i = 0; i < strain_table.size(); i++) {
@@ -240,21 +289,53 @@ double mpp::calculateDifficulty() {
 		weight *= weight_decay_base;
 	}
 
-	return difficulty * star_scaling_factor;
+	bmap_data.difficulty = difficulty * star_scaling_factor;
+	return bmap_data.difficulty;
 }
 
-double mpp::calculatePP(int score) {
-	return mpp::calculatePP(bmap_data.difficulty = calculateDifficulty(), score, bmap_data.od, bmap_data.note_count, _mods);
-}
-
-void mpp::setMods(int mods) {
-	_mods = mods;
-
-	if (mods != 0) {
-		if (mods & mpp_structs::mods::NF) { modarr[0] = true; }	// NF
-		if (mods & mpp_structs::mods::EZ) { modarr[1] = true; }	// EZ
-		if (mods & mpp_structs::mods::HT) { modarr[2] = true; }	// HT
-		if (mods & mpp_structs::mods::NC || mods & mpp_structs::mods::DT) { modarr[3] = true; }	// DT / NC
+// Calculate performance for a given map
+double mpp::calculator::getPerformance(unsigned score) {
+	if (score > 1000000 || score < 1 || (score > 500000 && mods & 256)) {
+		printf("Invalid score.\n");
+		return 0;
 	}
-}
 
+	if (!loaded) {
+		printf("No map loaded.\n");
+		return 0;
+	}
+
+	if (bmap_data.difficulty == 0) {
+		this->getDifficulty();
+	}
+
+	double score_rate = 1;
+
+	//make score calculable (will require correct star rating for the HT and EZ mods)
+	if (mods != 0) {
+		if (mods & mods::NF) score_rate *= 0.5;
+		if (mods & mods::EZ) score_rate *= 0.5;
+		if (mods & mods::HT) score_rate *= 0.5;
+	}
+
+	double real_score = score / score_rate;
+	if (real_score > 1000000) return -1;
+
+	double hitwindow300 = 34 + 3 * (fmin(10, fmax(0, 10 - this->bmap_data.od)));
+	double strain = pow((5 * fmax(1, this->bmap_data.difficulty / 0.2) - 4), 2.2) / 135 * (1 + 0.1 * fmin(1, (double)this->bmap_data.note_count / 1500));
+	
+	if (real_score <= 500000) strain *= 0.1 * (real_score / 500000); //strain = 0;
+	else if (real_score <= 600000) strain *= 0.3 * (real_score - 500000) / 100000;
+	else if (real_score <= 700000) strain *= 0.3 + (real_score - 600000) / 100000 * 0.25;
+	else if (real_score <= 800000) strain *= 0.55 + (real_score - 700000) / 100000 * 0.2;
+	else if (real_score <= 900000) strain *= 0.75 + (real_score - 800000) / 100000 * 0.15;
+	else strain *= 0.9 + (real_score - 900000) / 100000 * 0.1;
+
+	double accuracy = fmax(0, 0.2 - ((hitwindow300 - 34) * 0.006667)) * strain * pow((fmax(0, real_score - 960000) / 40000), 1.1);
+
+	double pp_multiplier = 0.8;
+	if (mods & mods::NF) pp_multiplier *= 0.9;
+	if (mods & mods::EZ) pp_multiplier *= 0.5;
+
+	return pow(pow(strain, 1.1) + pow(accuracy, 1.1), (1 / 1.1)) * pp_multiplier;
+}
